@@ -1,0 +1,54 @@
+services:
+  fastapi:
+    build: .
+    container_name: acme-app
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://my-redis-service:6379/0
+    depends_on:
+      - my-redis-service
+
+  my-redis-service:
+    image: redis:7-alpine
+    container_name: acme-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  postgres:
+    image: postgres:16
+    container_name: acme-postgres
+    environment:
+      POSTGRES_USER: acme_user
+      POSTGRES_PASSWORD: acme_password
+      POSTGRES_DB: acme_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.2
+    container_name: acme-keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/acme_db
+      KC_DB_USERNAME: acme_user
+      KC_DB_PASSWORD: acme_password
+      KC_HOSTNAME: localhost
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+
+volumes:
+  redis_data:
+  postgres_data:
