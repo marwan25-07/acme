@@ -154,5 +154,11 @@ Evaluation can be run with:
 
 ```bash
 py -m evals/run_evals
+```
 
+## AI Usage Note
+
+AI tools were used during the development of this prototype to support debugging and repetitive implementation tasks. For example, AI assistance was used to help apply the logging framework I had already designed across the customer tools file and to troubleshoot implementation issues during development.
+
+The core architecture, design principles, security approach, and technical trade-offs were designed by me. AI-generated suggestions or code were reviewed, adapted where necessary, and tested before being included in the final project.
 
