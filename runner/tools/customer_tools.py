@@ -1,7 +1,12 @@
 from pydantic import BaseModel, Field
 from agents import function_tool, RunContextWrapper
-from runner.schemas import AgentContextStore
-from enum import Enum
+from runner.schemas import (
+    AgentContextStore,
+    ToolResultStatus,
+    ToolResult,
+    IssuePriority,
+    IssueStatus
+)
 from typing import Any, Optional
 from db.customer_repository import (
     add_customer,
@@ -21,37 +26,20 @@ from db.customer_repository import (
     update_next_action,
     get_customer_overview,
 )
+from observability.tracing import trace_tool_call
 from runner.tools.tool_permissions import permission_checker, validate_tool_permissions
+from runner.templates.build_logger_templates import LoggingTemplates
+import time
 import logging 
+
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class IssueStatus(str, Enum):
-    OPEN = "open"
-    IN_PROGRESS = "in_progress"
-    BLOCKED = "blocked"
-    RESOLVED = "resolved"
-    CLOSED = "closed"
-
-class IssuePriority(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
-
-class ToolResultStatus(str, Enum):
-    SUCCESS = "success"
-    ERROR = "error"
-
-class ToolResult(BaseModel):
-    status: ToolResultStatus
-    message: str
-    data: Optional[Any] = None
-
 def success(message: str, data: Any = None) -> dict:
     return ToolResult(
-        status=ToolResultStatus.SUCCESS,
+        status=ToolResultStatus.SUCCESS.value,
         message=message,
         data=data,
     ).model_dump()
@@ -59,7 +47,7 @@ def success(message: str, data: Any = None) -> dict:
 
 def error(message: str, data: Any = None) -> dict:
     return ToolResult(
-        status=ToolResultStatus.ERROR,
+        status=ToolResultStatus.ERROR.value,
         message=message,
         data=data,
     ).model_dump()  
@@ -70,6 +58,10 @@ def clean_title(value: str|None) -> str|None:
     else:
         value = value.strip().title()
         return value
+    
+def log_agent_info(ctx: RunContextWrapper[AgentContextStore]):
+    init_logger = LoggingTemplates(filename="customer_tools.py", user_id=ctx.context.user_id, conversation_id=ctx.context.conversation_id)
+    return init_logger
 
 
 # create customer
@@ -83,25 +75,47 @@ class CreateCustomerInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("create_customer")
 )
-def create_customer_tool(args: CreateCustomerInput) -> dict:
-    logger.info("entering customer_tool: create_customer_tool")
+def create_customer_tool(ctx:RunContextWrapper[AgentContextStore], args: CreateCustomerInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    customer = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="create_customer_tool called", function="create_customer_tool", developer_note= None)
     try:
         customer_id = add_customer(
             name=clean_title(args.name),
             industry=clean_title(args.industry),
             account_manager=clean_title(args.account_manager),
         )
-
         customer = get_customer_by_id(customer_id)
-
+        
+        log.create_info_log(event="create_customer_tool completed", function="create_customer_tool", developer_note= None)
         return success(
             message="Customer created or updated successfully.",
             data=customer,
         )
 
     except Exception as exc:
-        logger.error(f"customer_tool: create_customer_tool. error: {exc}")
+        caught_error = exc
+        log.create_error_log(event="create_customer_tool failed", function="create_customer_tool", error_type= type(exc).__name__, error= exc, developer_note= None)
         return error(f"Failed to create customer: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="create customer",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"title": args.name, "industry":args.industry, "account_manager": args.account_manager},
+                tool_output= customer,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="create_customer tool call traced", function="create_customer_tool", developer_note= None)
+    
     
 # find customer
 class FindCustomerInput(BaseModel):
@@ -112,8 +126,15 @@ class FindCustomerInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("read_customer")
 )
-def find_customer_tool(args: FindCustomerInput) -> dict:
-    logger.info("entering customer_tool: find_customer_tool")
+def find_customer_tool(ctx:RunContextWrapper[AgentContextStore], args: FindCustomerInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    customer = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="find_customer_tool called", function="find_customer_tool", developer_note= None)
     try:
         customer = get_customer(clean_title(args.customer_name))
 
@@ -122,15 +143,30 @@ def find_customer_tool(args: FindCustomerInput) -> dict:
                 message="Customer not found.",
                 data={"customer_name": args.customer_name},
             )
-
+        
+        find_customer_tool
         return success(
             message="Customer found.",
             data=customer,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: find_customer_tool. error: {exc}")
         return error(f"Failed to find customer: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="find customer",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"customer_name": args.customer_name},
+                tool_output= customer,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="find_customer tool call traced", function="find_customer_tool", developer_note= None)
     
 # list customer
 class ListCustomersInput(BaseModel):
@@ -144,19 +180,41 @@ class ListCustomersInput(BaseModel):
         #strict_mode = True,
         is_enabled= True #permission_checker("read_customer")
 )
-def list_customers_tool() -> dict:
-    logger.info(f"entering customer_tool: list_customers_tool")
+def list_customers_tool(ctx:RunContextWrapper[AgentContextStore]) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    customers = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="list_customers_tool called", function="list_customers_tool", developer_note= None)
     try:
         customers = list_customers(search=None)
 
+        log.create_info_log(event="list_customers_tool completed", function="list_customers_tool", developer_note= None)
         return success(
             message=f"Found {len(customers)} customer(s).",
             data=customers,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: list_customers_tool. error: {exc}")
         return error(f"Failed to list customers: {str(exc)}")
+
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="list customers",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= None,
+                tool_output= customers,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="list_customers tool call traced", function="list_customers_tool", developer_note= None)
     
 # update customer
 class UpdateCustomerInput(BaseModel):
@@ -170,8 +228,15 @@ class UpdateCustomerInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("update_customer")
 )
-def update_customer_tool(args: UpdateCustomerInput) -> dict:
-    logger.info(f"entering customer_tool: update_customer_tool")
+def update_customer_tool(ctx:RunContextWrapper[AgentContextStore], args: UpdateCustomerInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    updated_customer = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="list_customers_tool called", function="update_customer_tool", developer_note= None)
     try:
         updated_customer = update_customer(
             customer_id=args.customer_id,
@@ -185,15 +250,29 @@ def update_customer_tool(args: UpdateCustomerInput) -> dict:
                 message="Customer not found or could not be updated.",
                 data={"customer_id": args.customer_id},
             )
-
+        log.create_info_log(event="list_customers_tool completed", function="update_customer_tool", developer_note= None)
         return success(
             message="Customer updated successfully.",
             data=updated_customer,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: update_customer_tool. error: {exc}")
         return error(f"Failed to update customer: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="update customer",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"customer_id": args.customer_id, "title":args.title, "industry": args.industry, "account_manager": args.account_manager},
+                tool_output= updated_customer,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="list_customers tool trace completed", function="update_customer_tool", developer_note= None)
 
 # create issue
 class CreateIssueInput(BaseModel):
@@ -207,8 +286,15 @@ class CreateIssueInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("create_issue")
 )
-def create_issue_tool(args: CreateIssueInput) -> dict:
-    logger.info(f"entering customer_tool: create_issue_tool")
+def create_issue_tool(ctx:RunContextWrapper[AgentContextStore], args: CreateIssueInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    issue = None
+    
+    log = log_agent_info(ctx)
+    log.create_info_log(event="create_issue_tool called", function="create_issue_tool", developer_note= None)
     try:
         issue_id = add_issue(
             customer_id=args.customer_id,
@@ -216,17 +302,31 @@ def create_issue_tool(args: CreateIssueInput) -> dict:
             status=args.status.value,
             priority=args.priority.value if args.priority else None,
         )
-
         issue = get_issue(issue_id)
 
+        log.create_info_log(event="create_issue_tool completed", function="create_issue_tool", developer_note= None)
         return success(
             message="Issue created or updated successfully.",
             data=issue,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: create_issue_tool. error: {exc}")
         return error(f"Failed to create issue: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="create issue",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"customer_id": args.customer_id, "title":args.title, "status": args.status, "priority": args.priority},
+                tool_output= issue,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="create_issue tool trace completed", function="create_issue_tool", developer_note= None)
     
 # get issue
 class GetIssueInput(BaseModel):
@@ -237,8 +337,15 @@ class GetIssueInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("read_issue")
 )
-def get_issue_tool(args: GetIssueInput) -> dict:
-    logger.info(f"entering customer_tool: get_issue_tool")
+def get_issue_tool(ctx:RunContextWrapper[AgentContextStore], args: GetIssueInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    issue = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="get_issue_tool called", function="get_issue_tool", developer_note= None)
     try:
         issue = get_issue(args.issue_id)
 
@@ -248,14 +355,29 @@ def get_issue_tool(args: GetIssueInput) -> dict:
                 data={"issue_id": args.issue_id},
             )
 
+        log.create_info_log(event="get_issue_tool completed", function="get_issue_tool", developer_note= None)
         return success(
             message="Issue found.",
             data=issue,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: get_issue_tool. error: {exc}")
         return error(f"Failed to get issue: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="get issue",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"issue_id": args.issue_id},
+                tool_output= issue,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="get_issue tool trace completed", function="get_issue_tool", developer_note= None)
     
 # list customer issues
 class GetCustomerIssuesInput(BaseModel):
@@ -266,19 +388,41 @@ class GetCustomerIssuesInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("read_issue")
 )
-def get_customer_issues_tool(args: GetCustomerIssuesInput) -> dict:
-    logger.info(f"entering customer_tool: get_customer_issues_tool")
+def get_customer_issues_tool(ctx:RunContextWrapper[AgentContextStore], args: GetCustomerIssuesInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    issues = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="get_customer_issues_tool called", function="get_customer_issues_tool", developer_note= None)
     try:
         issues = get_customer_issues(args.customer_id)
 
+        log.create_info_log(event="get_customer_issues_tool completed", function="get_customer_issues_tool", developer_note= None)
         return success(
             message=f"Found {len(issues)} issue(s).",
             data=issues,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: get_customer_issues_tool. error: {exc}")
         return error(f"Failed to get customer issues: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="get customer issues",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"customer_id": args.customer_id},
+                tool_output= issues,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="get_customer_issues_tool trace completed", function="get_customer_issues_tool", developer_note= None)
     
 # update issues
 class UpdateIssueInput(BaseModel):
@@ -292,8 +436,15 @@ class UpdateIssueInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("update_issue")
 )
-def update_issue_tool(args: UpdateIssueInput) -> dict:
-    logger.info(f"entering customer_tool: update_issue_tool.")
+def update_issue_tool(ctx:RunContextWrapper[AgentContextStore], args: UpdateIssueInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    updated_issue = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="update_issue_tool called", function="update_issue_tool", developer_note= None)
     try:
         updated_issue = update_issue(
             issue_id=args.issue_id,
@@ -308,14 +459,29 @@ def update_issue_tool(args: UpdateIssueInput) -> dict:
                 data={"issue_id": args.issue_id},
             )
 
+        log.create_info_log(event="update_issue_tool completed", function="update_issue_tool", developer_note= None)
         return success(
             message="Issue updated successfully.",
             data=updated_issue,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool:update_issue_tool. error: {exc}")
         return error(f"Failed to update issue: {str(exc)}")
+
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="update issue",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"issue_id": args.issue_id, "title": args.title, "status": args.status.value if args.status else None, "priority": args.priority.value if args.priority else None},
+                tool_output= updated_issue,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="update_issue_tool trace completed", function="update_issue_tool", developer_note= None)
 
 # add issue note
 class AddIssueNoteInput(BaseModel):
@@ -327,16 +493,23 @@ class AddIssueNoteInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("create_issue")
 )
-def add_issue_note_tool(args: AddIssueNoteInput) -> dict:
-    logger.info(f"entering customer_tool:add_issue_note_tool")
+def add_issue_note_tool(ctx:RunContextWrapper[AgentContextStore], args: AddIssueNoteInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    update_id = None
+    
+    log = log_agent_info(ctx)
+    log.create_info_log(event="add_issue_note_tool called", function="add_issue_note_tool", developer_note= None)
     try:
         update_id = add_issue_update(
             issue_id=args.issue_id,
             update_text=args.note_text,
         )
-
         updates = get_issue_updates(args.issue_id)
 
+        log.create_info_log(event="add_issue_note_tool completed", function="add_issue_note_tool", developer_note= None)
         return success(
             message="Issue note added successfully.",
             data={
@@ -347,8 +520,22 @@ def add_issue_note_tool(args: AddIssueNoteInput) -> dict:
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool:add_issue_note_tool. error: {exc}")
         return error(f"Failed to add issue note: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="add issue notes",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"issue_id": args.issue_id, "update_text": args.note_text},
+                tool_output= update_id,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="add_issue_note_tool trace completed", function="add_issue_note_tool", developer_note= None)
 
 # get issue notes
 class GetIssueNotesInput(BaseModel):
@@ -359,19 +546,41 @@ class GetIssueNotesInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("read_issue")
 )
-def get_issue_notes_tool(args: GetIssueNotesInput) -> dict:
-    logger.info(f"entering customer_tool: get_issue_notes_tool")
+def get_issue_notes_tool(ctx:RunContextWrapper[AgentContextStore], args: GetIssueNotesInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    updates = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="get_issue_notes_tool called", function="get_issue_notes_tool", developer_note= None)
     try:
         updates = get_issue_updates(args.issue_id)
 
+        log.create_info_log(event="get_issue_notes_tool completed", function="get_issue_notes_tool", developer_note= None)
         return success(
             message=f"Found {len(updates)} note(s).",
             data=updates,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: get_issue_notes_tool. error: {exc}")
         return error(f"Failed to get issue notes: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="get issue notes",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"issue_id": args.issue_id},
+                tool_output= updates,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="get_issue_notes_tool trace completed", function="get_issue_notes_tool", developer_note= None)
 
 # update issue note   
 class UpdateIssueNoteInput(BaseModel):
@@ -383,14 +592,23 @@ class UpdateIssueNoteInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("update_issue")
 )
-def update_issue_note_tool(args: UpdateIssueNoteInput) -> dict:
+def update_issue_note_tool(ctx:RunContextWrapper[AgentContextStore], args: UpdateIssueNoteInput) -> dict:
+    start_time=time.time()
     logger.info(f"entering customer_tool: update_issue_note_tool")
+
+    #set default values
+    caught_error = None
+    updated_note = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="update_issue_note_tool called", function="update_issue_note_tool", developer_note= None)
     try:
         updated_note = update_issue_update(
             update_id=args.update_id,
             update_text=args.note_text,
         )
 
+        log.create_info_log(event="update_issue_note_tool completed", function="update_issue_note_tool", developer_note= None)
         if updated_note is None:
             return error(
                 message="Issue note not found or could not be updated.",
@@ -403,8 +621,22 @@ def update_issue_note_tool(args: UpdateIssueNoteInput) -> dict:
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: update_issue_note_tool. error: {exc}")
         return error(f"Failed to update issue note: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="update issue note",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"update_id": args.update_id, "updated_text": args.update_text},
+                tool_output= None,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="update_issue_note_tool trace completed", function="update_issue_note_tool", developer_note= None)
     
 # add next action 
 class AddNextActionInput(BaseModel):
@@ -417,29 +649,49 @@ class AddNextActionInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("create_actions")
 )
-def add_next_action_tool(args: AddNextActionInput) -> dict:
-    logger.info(f"entering customer_tool: add_next_action_tool")
+def add_next_action_tool(ctx:RunContextWrapper[AgentContextStore], args: AddNextActionInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    actions = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="add_next_action_tool called", function="add_next_action_tool", developer_note= None)
     try:
         action_id = add_next_action(
             issue_id=args.issue_id,
             action_text=args.action_text,
             created_by=clean_title(args.created_by),
         )
+        actions = get_next_actions(args.issue_id)
 
-        actions = add_next_action(args.issue_id)
-
-        return success(
+        log.create_info_log(event= f"add_next_action_tool completed. {str(actions)}", function="add_next_action_tool", developer_note= None)
+        test_success = success(
             message="Next action added successfully.",
-            data={
-                "action_id": action_id,
-                "issue_id": args.issue_id,
-                "all_next_actions": actions,
-            },
+            data=None,
         )
-
+        logger.info(f"logging test {test_success}")
+        return test_success
     except Exception as exc:
+        logging.info("i am in expection block")
+        caught_error = exc
         logger.error(f"customer_tool: add_next_action_tool. error: {exc}")
         return error(f"Failed to add next action: {str(exc)}")
+    
+    finally:
+        logging.info("i am in finally block")
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="add next-action",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"issue_id": args.issue_id},
+                tool_output= None,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="add_next_action_tool trace completed", function="add_next_action_tool", developer_note= None)
     
 # get next actions
 class GetNextActionsInput(BaseModel):
@@ -450,20 +702,44 @@ class GetNextActionsInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("read_actions")
 )
-def get_next_actions_tool(args: GetNextActionsInput) -> dict:
-    logger.info(f"entering customer_tool: get_next_actions_tool")
+def get_next_actions_tool(ctx:RunContextWrapper[AgentContextStore], args: GetNextActionsInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    actions = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="get_next_actions_tool called", function="get_next_actions_tool", developer_note= None)
     try:
         actions = get_next_actions(args.issue_id)
 
+        log.create_info_log(event="get_next_actions_tool completed", function="get_next_actions_tool", developer_note= None)
         return success(
             message=f"Found {len(actions)} next action(s).",
             data=actions,
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: get_next_actions_tool. error: {exc}")
         return error(f"Failed to get next actions: {str(exc)}")
     
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        try:
+            trace_tool_call(
+                    trace_id = ctx.context.trace_id,
+                    tool_name="get next-actions",
+                    tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                    tool_input= {"issue_id": args.issue_id},
+                    tool_output= actions,
+                    latency_ms = latency_ms,
+                    error=str(caught_error) if caught_error else None
+                )
+            log.create_info_log(event="get_next_actions_tool trace completed", function="get_next_actions_tool", developer_note= None)
+        except Exception as e:
+            logger.exception(f"error: {e}")
 # update next actions 
 class UpdateNextActionInput(BaseModel):
     action_id: int = Field(..., description="The next action ID to update.")
@@ -475,8 +751,15 @@ class UpdateNextActionInput(BaseModel):
         strict_mode = True,
         is_enabled=permission_checker("update_actions")
 )
-def update_next_action_tool(args: UpdateNextActionInput) -> dict:
-    logger.info(f"entering customer_tool: update_next_action_tool")
+def update_next_action_tool(ctx:RunContextWrapper[AgentContextStore], args: UpdateNextActionInput) -> dict:
+    start_time=time.time()
+
+    #set default values
+    caught_error = None
+    updated_action = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="update_next_action_tool called", function="update_next_action_tool", developer_note= None)
     try:
         updated_action = update_next_action(
             action_id=args.action_id,
@@ -484,6 +767,7 @@ def update_next_action_tool(args: UpdateNextActionInput) -> dict:
             created_by=clean_title(args.created_by),
         )
 
+        log.create_info_log(event="update_next_action_tool completed", function="update_next_action_tool", developer_note= None)
         if updated_action is None:
             return error(
                 message="Next action not found or could not be updated.",
@@ -496,53 +780,118 @@ def update_next_action_tool(args: UpdateNextActionInput) -> dict:
         )
 
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: update_next_action_tool. error: {exc}")
         return error(f"Failed to update next action: {str(exc)}")
+    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_name="update next-action",
+                tool_input= {"action_id": args.action_id, "action_text": args.action_text, "created_by": args.created_by},
+                tool_output= None,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="update_next_action_tool trace completed", function="update_next_action_tool", developer_note= None)
     
 # get customer overview
 class GetCustomerOverviewInput(BaseModel):
     customer_name: str = Field(..., description="The exact company name.")
 
 @function_tool(
-        description_override= "Get a customer, their issues, issue notes and next actions. This is the main-context loading tool for the agent.",
+        description_override= "Get a customer, their issues, issue notes. This is the main-context loading tool for the agent.",
         strict_mode = True,
         is_enabled=permission_checker("read_customer")
 )
-def get_customer_overview_tool(args:GetCustomerOverviewInput):
-    logger.info(f"entering customer_tool: get_customer_overview. customer name is {args.customer_name}")
+def get_customer_overview_tool(ctx:RunContextWrapper[AgentContextStore], args:GetCustomerOverviewInput):
+    start_time = time.time()
+
+    #set default values
+    caught_error = None
+    overview = None
+    customer_name = None
+
+    #run
+    log = log_agent_info(ctx)
+    log.create_info_log(event="get_customer_overview_tool called", function="get_customer_overview_tool", developer_note= None)
     try:
         customer_name = clean_title(args.customer_name)
         overview = get_customer_overview(customer_name = customer_name)
+
+        log.create_info_log(event="get_customer_overview_tool completed", function="get_customer_overview_tool", developer_note= None)
         if overview is None:
             return error(
                 message="Customer not found.",
                 data = {"customer_name": args.customer_name})
         else:
-            return success(
+            tool_result = success(
                 message="Customer overview found",
                 data = overview
             )
+            return tool_result
+        
     except Exception as exc:
+        caught_error = exc
         logger.error(f"customer_tool: get_customer_overview. error: {exc}")
-        return error(f"failed to get customer overview: {str(exc)}")
+        tool_result = error(f"failed to get customer overview: {str(exc)}")
+        return tool_result
     
-# check permissions tool
-    
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="get_customer_overview",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= {"customer_name": customer_name or args.customer_name},
+                tool_output= overview,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="get_customer_overview_tool trace completed", function="get_customer_overview_tool", developer_note= None)
+
+
+# check permissions tool  
 @function_tool(
     description_override = "provides permissions on actions the user can do. Such as the ability to read/update/create customer/issues/issue notes/next actions",
     strict_mode= True,
     is_enabled = True
 )
 def get_my_permissions_tool(ctx: RunContextWrapper[AgentContextStore]) -> dict:
+    start_time = time.time()
+
+    #set default values
+    caught_error = None
+    permissions = None
+
+    log = log_agent_info(ctx)
+    log.create_info_log(event="get_my_permissions_tool called", function="get_my_permissions_tool", developer_note= None)
     try:
-        logger.info("entered get_my_permissions tool")
         permissions = validate_tool_permissions(ctx)
+
+        log.create_info_log(event="get_my_permissions_tool completed", function="get_my_permissions_tool", developer_note= None)
         return success(
             message = "agent tool permissions found",
             data = permissions
         )
     except Exception as exc:
+        caught_error = exc
         logger.error(f"get_my_permissions_tool: error: {exc}")
         return error(f"failed to get tool permissions: {str(exc)}")
+
+    finally:
+        latency_ms = int((time.time() - start_time)*1000)
+        trace_tool_call(
+                trace_id = ctx.context.trace_id,
+                tool_name="get_my_permission",
+                tool_status = ToolResultStatus.SUCCESS if caught_error is None else ToolResultStatus.ERROR,
+                tool_input= None,
+                tool_output= permissions,
+                latency_ms = latency_ms,
+                error=str(caught_error) if caught_error else None
+            )
+        log.create_info_log(event="get_my_permissions_tool trace completed", function="get_my_permissions_tool", developer_note= None)
         
 
