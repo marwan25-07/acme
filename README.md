@@ -88,7 +88,7 @@ A key part of the architecture is the use of a dynamic system prompt. The system
 The tools exposed to the agent are also dependent on the user's role and permissions. Tools are not simply made available to every user at runtime. Instead, the application checks the authenticated user's permissions and only enables the tools that the user is allowed to access. For example, a user with read-only permissions may be allowed to retrieve customer profiles and view open issues, but they may not be given access to tools that create issue notes or update next actions. This means restricted tools are not exposed to the agent during that run, reducing the risk of the agent attempting actions the user is not authorised to perform.This provides an additional layer of security because access control is enforced before the agent runs, rather than relying only on prompt instructions.
 
 ## Evaluation and Observability
-The evaluation framework uses two complementary approaches: **LLM-as-Evaluator** and **Technical Evaluation**. Together, these assess both the quality of ACME’s final response and the correctness of the agent’s underlying behaviour.
+The evaluation framework uses two complementary approaches: **LLM-as-Evaluator** and **Technical Evaluation**. Together, these assess both the quality of ACME’s final response and the correctness of the agent’s underlying behaviour. A previous eval file run was added to provide an example of the tests implemented [here](https://github.com/marwan25-07/acme/blob/main/evals/evaluations/eval_results.jsonl).
 
 #### 1. LLM-as-Evaluator
 
