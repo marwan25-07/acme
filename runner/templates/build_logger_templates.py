@@ -1,52 +1,91 @@
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-class logging_templates:
-    def __init__(self, filename:str):
+
+class LoggingTemplates:
+    def __init__(
+        self,
+        filename: str,
+        user_id: str | None = None,
+        conversation_id: str | None = None
+    ):
         self.filename = filename
-    
-    def create_error_log(self, event: str, function:str, error_type:str, error: Exception, developer_note: str, user_id: str, conversation_id: str) -> dict:
-        return {
+        self.user_id = user_id
+        self.conversation_id = conversation_id
+
+    def create_error_log(
+        self,
+        event: str,
+        function: str,
+        error_type: str,
+        error: Exception,
+        developer_note: str|None = None
+    ) -> dict:
+        error_log = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": "ERROR",
-            "user_id": user_id,
-            "conversation_id": conversation_id,
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
             "event": event,
             "error_type": error_type,
-            "error": error,
+            "error_class": error.__class__.__name__,
+            "error": str(error),
             "developer_note": developer_note,
             "source": {
                 "filename": self.filename,
                 "function": function
             }
         }
-    
-    def create_critical_log(self, event: str, function: str, error_type: str, error: Exception, developer_note: str) -> dict:
-        return {
+
+        logger.error(error_log)
+        return error_log
+
+    def create_critical_log(
+        self,
+        event: str,
+        function: str,
+        error_type: str,
+        error: Exception,
+        developer_note: str
+    ) -> dict:
+        critical_log = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": "CRITICAL",
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
             "event": event,
             "error_type": error_type,
-            "error": error,
+            "error_class": error.__class__.__name__,
+            "error": str(error),
             "developer_note": developer_note,
             "source": {
                 "filename": self.filename,
                 "function": function
             }
         }
-    
-    def create_info_log(self, event:str, function:str, user_id: str|None = None, conversation_id: str|None = None) -> dict:
-        return {
+
+        logger.critical(critical_log)
+        return critical_log
+
+    def create_info_log(
+        self,
+        event: str,
+        function: str,
+        developer_note=None
+    ) -> dict:
+        info_log = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": "INFO",
-            "user_id": user_id,
-            "conversation_id": conversation_id,
+            "user_id": self.user_id,
+            "conversation_id": self.conversation_id,
             "event": event,
             "source": {
                 "filename": self.filename,
                 "function": function
             }
         }
+
+        logger.info(info_log)
+        return info_log

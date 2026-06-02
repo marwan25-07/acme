@@ -4,6 +4,8 @@ services:
     container_name: acme-app
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       REDIS_URL: redis://my-redis-service:6379/0
     depends_on:

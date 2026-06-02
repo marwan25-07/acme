@@ -39,4 +39,5 @@ class Settings(BaseSettings):
     postgresql_user: str = ""
     postgresql_password: str = ""
 
+
 acme_settings = Settings()

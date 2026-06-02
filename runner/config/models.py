@@ -21,3 +21,4 @@ def mini_model() -> OpenAIResponsesModel:
     set_tracing_disabled(True)
     _mini_model = OpenAIResponsesModel(model = acme_settings.mini_model_name, openai_client = mini_client)
     return _mini_model 
+
