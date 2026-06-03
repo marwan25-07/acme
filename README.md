@@ -70,7 +70,7 @@ However, PostgreSQL remains the source of truth for customer data. This avoids t
 
 Tool calls and tool outputs were not cached in the current version due to time constraints. In a future version, caching tool outputs could reduce repeated calls and improve response speed. The trade-off is that cached tool outputs may become outdated, so cache invalidation rules, expiry policies, or freshness checks would need to be introduced. For example, outputs from tools that retrieve static or rarely changing data could be cached for longer, while outputs involving live customer status or open issues would require shorter expiry times or direct database look-ups.
 
-Long term, if the volume of customer data increases, I would consider introducing a scheduled process that refreshes a Redis cache of customers with currently open issues. This would prioritise caching the data most likely to be requested by users. I would also design database tools to filter and retrieve only the required customer records rather than returning the entire dataset. This would reduce database load, improve retrieval times, make the returned data easier for the agent to interpret, and reduce the number of input tokens consumed in the agent’s reasoning process.
+Long term, if the volume of customer data increases, I would  redesign database tools to filter and retrieve only the required customer records rather than returning the entire dataset. This would reduce retrieval times and make the returned data easier for the agent to interpret, as well as reduce the number of input tokens consumed in the agent’s reasoning process.
 
 ## System Architecture:
 <img width="auto" height="650" alt="image" src="https://github.com/user-attachments/assets/6dda9e62-3345-4bbc-91d8-db5ff2cc45ec" />
