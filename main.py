@@ -88,7 +88,7 @@ async def validate_acme(
     catch_error = None
     try:
     
-        agent_context_store = AgentContextStore(user_role= "admin", trace_id=trace_id, user_id=user_id, conversation_id=conversation_id)  #user_info['role']
+        agent_context_store = AgentContextStore(user_role= user_info['role'], trace_id=trace_id, user_id=user_id, conversation_id=conversation_id)  #user_info['role']
         response = await run_acme_agent(user_text= agent_memory, agent_context_store=agent_context_store)
         _memory_store.extend_agent_memory(current_memory=agent_memory, new_knowledge= [{"role":"assistant", "content": response}], background_tasks=background_tasks)
         return {
