@@ -73,7 +73,7 @@ Tool calls and tool outputs were not cached in the current version due to time c
 Long term, if the volume of customer data increases, I would  redesign database tools to filter and retrieve only the required customer records rather than returning the entire dataset. This would reduce retrieval times and make the returned data easier for the agent to interpret, as well as reduce the number of input tokens consumed in the agent’s reasoning process.
 
 ## System Architecture:
-<img width="auto" height="650" alt="image" src="https://github.com/user-attachments/assets/6dda9e62-3345-4bbc-91d8-db5ff2cc45ec" />
+<img width="auto" height="650" alt="image" src="https://github.com/user-attachments/assets/5e9558b6-94e6-410c-9e38-a439113a5589" />
 
 ## Agent Architecture
 
