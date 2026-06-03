@@ -85,6 +85,7 @@ async def validate_acme(
     )
 
     # run agent
+    response = None
     catch_error = None
     try:
     
